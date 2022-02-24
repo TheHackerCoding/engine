@@ -1,19 +1,37 @@
-use mlua::{prelude::*, AnyUserData, Lua, Table, UserData};
+use mlua::{prelude::*, Lua, UserData};
 use raylib::*;
+use std::{thread, time};
+
+use crate::function_name;
 
 fn used_memory(lua: &Lua, _: ()) -> LuaResult<usize> {
     Ok(lua.used_memory())
 }
 
-fn gc_reset(lua: &Lua, _: ()) -> LuaResult<usize> {
+fn gc_reset(lua: &Lua, _: ()) -> LuaResult<()> {
     lua.gc_restart();
-    Ok(1)
+    Ok(())
 }
+
+fn wait(lua: &Lua, time: u64) -> LuaResult<()> {
+    thread::sleep(time::Duration::from_secs(time));
+    Ok(())
+}
+
+#[derive(Debug)]
 struct LuaRaylibHandle(RaylibHandle);
 
+#[derive(Debug)]
+struct LuaRaylib((LuaRaylibHandle, LuaRaylibThread));
+impl UserData for LuaRaylib {}
+#[derive(Clone, Debug)]
 struct LuaRaylibThread(RaylibThread);
 
-impl LuaRaylibThread {}
+impl UserData for LuaRaylibThread {
+    fn add_fields<'lua, F: LuaUserDataFields<'lua, Self>>(_fields: &mut F) {}
+
+    fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(_methods: &mut M) {}
+}
 
 impl UserData for LuaRaylibHandle {
     fn add_fields<'lua, F: LuaUserDataFields<'lua, Self>>(fields: &mut F) {
@@ -25,20 +43,28 @@ impl UserData for LuaRaylibHandle {
     }
 
     fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
-        methods.add_method("begin_drawing", |_, this, value: RaylibThread| {})
+        //methods.add_method("begin_drawing", |_, this, value: LuaRaylibThread| {
+        //    return
+        //})
+        methods.add_method_mut("set_target_fps", |_, this, value: u32| {
+            Ok(this.0.set_target_fps(value))
+        })
     }
 }
 
-fn window_create(
-    lua: &Lua,
-    (width, height, name): (i32, i32, String),
-) -> LuaResult<(LuaRaylibHandle, LuaRaylibThread)> {
+fn window_create(lua: &Lua, (width, height, name): (i32, i32, String)) -> LuaResult<LuaRaylib> {
     let rl = raylib::init()
         .size(width, height)
         .title(name.as_str())
         .build();
     let _rl = (LuaRaylibHandle(rl.0), LuaRaylibThread(rl.1));
-    Ok(_rl)
+    Ok(LuaRaylib(_rl))
+}
+
+fn mass_import<'a, T>(lua: &'a Lua, misc: &[Fn<(&Lua, T)>]) {
+    let globals = lua.globals();
+    misc.into_iter()
+        .map(|x| globals.set(function_name!(x), lua.create_function(x)?));
 }
 
 fn import_libs(lua: &Lua) -> LuaResult<()> {
@@ -49,8 +75,9 @@ fn import_libs(lua: &Lua) -> LuaResult<()> {
     globals.set("misc", misc)?;
 
     let window = lua.create_table()?;
-    window.set("create", lua.create_function(window_create)?);
+    window.set("create", lua.create_function(window_create)?)?;
     globals.set("window", window)?;
+    mass_import(lua, &[gc_reset]);
     Ok(())
 }
 
